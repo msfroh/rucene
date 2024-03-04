@@ -266,7 +266,7 @@ impl IntPoint {
         )?))
     }
 }
-
+#[derive(Copy, Clone)]
 pub struct LongPoint;
 
 impl LongPoint {

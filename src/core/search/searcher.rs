@@ -263,6 +263,7 @@ pub trait IndexSearcher<C: Codec>: SearchPlanBuilder<C> {
 /// reader ({@link DirectoryReader#open(IndexWriter)}).
 /// Once you have a new `IndexReader`, it's relatively
 /// cheap to create a new IndexSearcher from it.
+#[derive(Clone)]
 pub struct DefaultIndexSearcher<
     C: Codec,
     R: IndexReader<Codec = C> + ?Sized,
@@ -284,6 +285,19 @@ pub struct DefaultIndexSearcher<
     // dismatch next limit to break.
     next_limit: usize,
 }
+
+unsafe impl<C, R, IR, SP> Send for DefaultIndexSearcher<C, R, IR, SP>
+where
+    C: Codec,
+    R: IndexReader<Codec = C> + ?Sized,
+    IR: Deref<Target = R>,
+    SP: SimilarityProducer<C> {}
+unsafe impl<C, R, IR, SP> Sync for DefaultIndexSearcher<C, R, IR, SP>
+where
+    C: Codec,
+    R: IndexReader<Codec = C> + ?Sized,
+    IR: Deref<Target = R>,
+    SP: SimilarityProducer<C> {}
 
 impl<C: Codec, R: IndexReader<Codec = C> + ?Sized, IR: Deref<Target = R>>
     DefaultIndexSearcher<C, R, IR, DefaultSimilarityProducer>

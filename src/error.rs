@@ -95,3 +95,7 @@ impl<Guard> From<PoisonError<Guard>> for Error {
         ErrorKind::Poisoned.into()
     }
 }
+
+unsafe impl Send for Error {}
+unsafe impl Sync for Error {}
+

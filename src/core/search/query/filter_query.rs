@@ -76,6 +76,9 @@ impl<C: Codec> Query<C> for FilterQuery<C> {
     }
 }
 
+unsafe impl<C: Codec> Send for FilterQuery<C> {}
+unsafe impl<C: Codec> Sync for FilterQuery<C> {}
+
 impl<C: Codec> fmt::Display for FilterQuery<C> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let filters_fmt: Vec<String> = self

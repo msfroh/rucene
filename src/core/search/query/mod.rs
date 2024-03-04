@@ -100,7 +100,7 @@ use std::hash::{Hash, Hasher};
 /// * [`MatchAllDocsQuery`](match_all/struct.MatchAllDocsQuery.html)
 ///
 /// See also the family of [`Span Queries`](spans/index.html)
-pub trait Query<C: Codec>: Display {
+pub trait Query<C: Codec>: Display + Send + Sync {
     /// Create new `Scorer` based on query.
     fn create_weight(
         &self,
