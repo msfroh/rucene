@@ -113,13 +113,18 @@ impl Worker {
 
     fn run(&mut self) {
         let cur_state = self.stop.load(std::sync::atomic::Ordering::Relaxed);
+        println!("cur_state exha, {}", cur_state);
         while !cur_state {
-            let mut wait = true;
+            // let mut wait = true;
             if let Ok(mut pool) = self.pool.lock() {
+                println!("worker pool, {}", pool);
                 if *pool > 0 {
                     let val = *pool;
                     *pool -= 1;
+                    println!("val, {}", val);
+                    println!("inside pool, {}", pool);
                     if val >= 0 {
+                        println!("looking for docs");
                         let mut manager = TopDocsCollector::new(10);
                         let query_lock = self.queries.lock().unwrap();
                         let query = query_lock.get(self.pos);
@@ -131,7 +136,7 @@ impl Worker {
                                 if self.pos >= self.queries.lock().unwrap().len() {
                                     self.pos = 0;
                                 }
-                                wait = false;
+                                // wait = false;
                             }
                             Err(e) => {
                                 eprintln!("{}", e);
@@ -141,9 +146,9 @@ impl Worker {
                         *pool += 1;
                     }
                 }
-            }
-            if wait {
-                thread::sleep(Duration::from_millis(50));
+                // if wait {
+                //     // thread::sleep(Duration::from_millis(50));
+                // }
             }
         }
     }
@@ -158,13 +163,15 @@ fn main() -> Result<()> {
     //     fs::create_dir(&dir_path)?;
     // }
 
-    let worker_count = std::env::args()
-        .nth(1)
-        .ok_or(Error::new(
-            std::io::ErrorKind::Other,
-            "Missing worker count argument",
-        ))?
-        .parse::<usize>()?;
+    // let worker_count = std::env::args()
+    //     .nth(1)
+    //     .ok_or(Error::new(
+    //         std::io::ErrorKind::Other,
+    //         "Missing worker count argument",
+    //     ))?
+    //     .parse::<usize>()?;
+
+    let worker_count = 1;
 
     // create index writer
     let config = Arc::new(IndexWriterConfig::default());
@@ -172,10 +179,6 @@ fn main() -> Result<()> {
     let writer = IndexWriter::new(directory, config)?;
 
     let queries = Arc::new(Mutex::new(vec![]));
-
-    let qps: AtomicI32 = 5000.into();
-
-    let mut sum: u128 = 0;
 
     if let Ok(mut lines) = read_lines("../range_datapoints") {
         let num_docs: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
@@ -262,6 +265,7 @@ fn main() -> Result<()> {
             worker.run();
         });
 
+        println!("spawn finish");
         worker_handles.push(handle);
     }
 
@@ -272,7 +276,9 @@ fn main() -> Result<()> {
     let mut found_target = 0;
 
     loop {
+        println!("{}", stop.load(std::sync::atomic::Ordering::Relaxed));
         let mut pool_size = pool.lock().unwrap();
+        println!("pool size, {}", pool_size);
         if *pool_size <= 0 {
             current_qps += delta_qps;
             println!("Increasing QPS to {}", current_qps);
@@ -291,15 +297,17 @@ fn main() -> Result<()> {
             println!("Decreasing QPS to {}", current_qps);
             *pool_size = current_qps;
         }
-        drop(pool_size);
-        thread::sleep(Duration::from_secs(1));
+        // drop(pool_size);
+        // thread::sleep(Duration::from_secs(1));
+    }
+
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for handle in worker_handles {
+        println!("in unwrap");
+        handle.join().unwrap();
     }
 
     println!("Maximum QPS: {}", max_qps);
-
-    for handle in worker_handles {
-        handle.join().unwrap();
-    }
 
     Ok(())
 }
