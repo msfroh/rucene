@@ -8,13 +8,14 @@ use rucene::core::search::query::{self, LongPoint, Query};
 use rucene::core::search::{DefaultIndexSearcher, IndexSearcher};
 use rucene::core::store::directory::FSDirectory;
 
+use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::fs::{self, File};
 use std::io::{self, BufRead, Error};
 use std::ops::Deref;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI32};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{self, AtomicBool, AtomicI32};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use std::{cmp, env, thread};
 
@@ -44,116 +45,6 @@ where
     let file = File::open(filename)?;
     Ok(io::BufReader::new(file).lines())
 }
-
-struct Worker {
-    queries:
-        Arc<Mutex<Vec<std::prelude::v1::Result<Box<dyn Query<CodecEnum>>, rucene::error::Error>>>>,
-    searcher: Arc<
-        DefaultIndexSearcher<
-            CodecEnum,
-            rucene::core::index::reader::StandardDirectoryReader<
-                FSDirectory,
-                CodecEnum,
-                rucene::core::index::merge::SerialMergeScheduler,
-                rucene::core::index::merge::TieredMergePolicy,
-            >,
-            Arc<
-                rucene::core::index::reader::StandardDirectoryReader<
-                    FSDirectory,
-                    CodecEnum,
-                    rucene::core::index::merge::SerialMergeScheduler,
-                    rucene::core::index::merge::TieredMergePolicy,
-                >,
-            >,
-            rucene::core::search::DefaultSimilarityProducer,
-        >,
-    >,
-    pool: Arc<Mutex<i32>>,
-    stop: Arc<std::sync::atomic::AtomicBool>,
-    pos: usize,
-}
-
-impl Worker {
-    fn new(
-        queries: Arc<
-            Mutex<Vec<std::prelude::v1::Result<Box<dyn Query<CodecEnum>>, rucene::error::Error>>>,
-        >,
-        searcher: Arc<
-            DefaultIndexSearcher<
-                CodecEnum,
-                rucene::core::index::reader::StandardDirectoryReader<
-                    FSDirectory,
-                    CodecEnum,
-                    rucene::core::index::merge::SerialMergeScheduler,
-                    rucene::core::index::merge::TieredMergePolicy,
-                >,
-                Arc<
-                    rucene::core::index::reader::StandardDirectoryReader<
-                        FSDirectory,
-                        CodecEnum,
-                        rucene::core::index::merge::SerialMergeScheduler,
-                        rucene::core::index::merge::TieredMergePolicy,
-                    >,
-                >,
-                rucene::core::search::DefaultSimilarityProducer,
-            >,
-        >,
-        start_pos: usize,
-        pool: Arc<Mutex<i32>>,
-        stop: Arc<std::sync::atomic::AtomicBool>,
-    ) -> Self {
-        Worker {
-            queries,
-            searcher,
-            pool,
-            stop,
-            pos: start_pos,
-        }
-    }
-
-    fn run(&mut self) {
-        let cur_state = self.stop.load(std::sync::atomic::Ordering::Relaxed);
-        println!("cur_state exha, {}", cur_state);
-        while !cur_state {
-            // let mut wait = true;
-            if let Ok(mut pool) = self.pool.lock() {
-                println!("worker pool, {}", pool);
-                if *pool > 0 {
-                    let val = *pool;
-                    *pool -= 1;
-                    println!("val, {}", val);
-                    println!("inside pool, {}", pool);
-                    if val >= 0 {
-                        println!("looking for docs");
-                        let mut manager = TopDocsCollector::new(10);
-                        let query_lock = self.queries.lock().unwrap();
-                        let query = query_lock.get(self.pos);
-                        let q = query.unwrap();
-                        let r = q.as_ref().unwrap();
-                        match self.searcher.search(&**r, &mut manager) {
-                            Ok(_) => {
-                                self.pos += 1;
-                                if self.pos >= self.queries.lock().unwrap().len() {
-                                    self.pos = 0;
-                                }
-                                // wait = false;
-                            }
-                            Err(e) => {
-                                eprintln!("{}", e);
-                            }
-                        }
-                    } else {
-                        *pool += 1;
-                    }
-                }
-                // if wait {
-                //     // thread::sleep(Duration::from_millis(50));
-                // }
-            }
-        }
-    }
-}
-
 fn main() -> Result<()> {
     // create index directory
     let path = "/tmp/test_rucene";
@@ -171,14 +62,16 @@ fn main() -> Result<()> {
     //     ))?
     //     .parse::<usize>()?;
 
-    let worker_count = 1;
+    let worker_count = 48;
+
+    let main_thread = thread::current();
 
     // create index writer
     let config = Arc::new(IndexWriterConfig::default());
     let directory = Arc::new(FSDirectory::with_path(&dir_path)?);
     let writer = IndexWriter::new(directory, config)?;
 
-    let queries = Arc::new(Mutex::new(vec![]));
+    let queries = Arc::new(RwLock::new(vec![]));
 
     if let Ok(mut lines) = read_lines("../range_datapoints") {
         let num_docs: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
@@ -198,7 +91,7 @@ fn main() -> Result<()> {
         }
         let num_queries: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
 
-        for _ in 0..*num_queries {
+        for i in 0..*num_queries {
             let l = lines.next().unwrap().unwrap();
 
             let mut range = l.split(',');
@@ -211,11 +104,12 @@ fn main() -> Result<()> {
 
             let upper_bound: i64 = upper.parse::<i64>().unwrap();
 
-            queries.lock().unwrap().push(LongPoint::new_range_query(
+            queries.write().unwrap().push(LongPoint::new_range_query(
                 "timestamp".into(),
                 lower_bound,
                 upper_bound,
             ));
+
         }
     }
 
@@ -241,71 +135,93 @@ fn main() -> Result<()> {
         >,
     > = Arc::new(DefaultIndexSearcher::new(Arc::new(reader), None));
 
-    let pool = Arc::new(Mutex::new(0));
+    let pool = Arc::new(AtomicI32::new(0));
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let query_offset = queries.lock().unwrap().len() / worker_count;
+    let query_offset = queries.read().unwrap().len() / worker_count;
+    let mut sum = 0;
 
-    let mut worker_handles = vec![];
+    let stop_clone = stop.clone();
 
-    for i in 0..worker_count {
-        let queries_clone = queries.clone();
-        let searcher_clone = index_searcher.clone();
-        let pool_clone = pool.clone();
-        let stop_clone = stop.clone();
-        let start_pos = query_offset * i;
+    // let mut worker_handles = vec![];
 
-        let handle: thread::JoinHandle<()> = thread::spawn(move || {
-            let mut worker = Worker::new(
-                queries_clone,
-                searcher_clone,
-                start_pos,
-                pool_clone,
-                stop_clone,
-            );
-            worker.run();
-        });
+    let mut max_qps = 1;
 
-        println!("spawn finish");
-        worker_handles.push(handle);
-    }
+    thread::scope(|s| {
+        for i in 0..worker_count {
+            let stop_clone = stop.clone();
+            let pool_clone = pool.clone();
+            let searcher_clone = index_searcher.clone();
+            let main_thread_clone = main_thread.clone();
+            let start_pos = query_offset * i;
+            let queries_clone = queries.clone();
 
-    let mut max_qps = 0;
-
-    let mut current_qps = 5000;
-    let mut delta_qps = 500;
-    let mut found_target = 0;
-
-    loop {
-        println!("{}", stop.load(std::sync::atomic::Ordering::Relaxed));
-        let mut pool_size = pool.lock().unwrap();
-        println!("pool size, {}", pool_size);
-        if *pool_size <= 0 {
-            current_qps += delta_qps;
-            println!("Increasing QPS to {}", current_qps);
-            *pool_size += current_qps;
-        } else {
-            delta_qps /= 2;
-            if delta_qps == 0 {
-                found_target += 1;
-                if found_target >= 5 {
-                    max_qps = current_qps;
-                    break;
+            s.spawn(move || {
+                // let mut start_pos_clone = start_pos.clone();
+                let mut pos = start_pos.clone();
+                while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
+                    let mut wait = true;
+                    if pool_clone.load(atomic::Ordering::Acquire) > 0 {
+                        // let val = *pool_clone;
+                        // let val = pool_clone.load(atomic::Ordering::AcqRel);
+                        if pool_clone.fetch_sub(1, atomic::Ordering::AcqRel) >= 1 {
+                            let mut manager = TopDocsCollector::new(10);
+                            let query = queries_clone.read().unwrap();
+                            let t = query.get(pos);
+                            let q = t.unwrap();
+                            let r = q.as_ref().unwrap();
+                            searcher_clone.search(&**r, &mut manager).unwrap();
+                            pos += 1;
+                            // sum += manager.top_docs().total_hits() as i64;
+                            if pos >= queries_clone.read().unwrap().len() {
+                                pos = 0;
+                            }
+                            wait = false;
+                        } else {
+                            pool_clone.fetch_add(1, atomic::Ordering::AcqRel);
+                        }
+                    }
+                    if wait {
+                        thread::park_timeout(Duration::from_millis(50));
+                    }
                 }
-                delta_qps = 1;
-            }
-            current_qps -= delta_qps;
-            println!("Decreasing QPS to {}", current_qps);
-            *pool_size = current_qps;
-        }
-        // drop(pool_size);
-        // thread::sleep(Duration::from_secs(1));
-    }
 
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    for handle in worker_handles {
-        println!("in unwrap");
-        handle.join().unwrap();
-    }
+                // worker_handles.push(handle);
+            });
+            // main_thread_clone.unpark();
+        }
+
+        let mut current_qps = 4000;
+        let mut delta_qps = 200;
+        let mut found_target = 0;
+
+        pool.store(current_qps, atomic::Ordering::Release);
+
+        thread::sleep(Duration::from_secs(1));
+
+        loop {
+            println!("pool size, {}", pool.load(atomic::Ordering::Acquire));
+            if pool.load(atomic::Ordering::Acquire) <= 0 {
+                current_qps += delta_qps;
+                println!("Increasing QPS to {}", current_qps);
+            } else {
+                delta_qps /= 2;
+                if delta_qps == 0 {
+                    found_target += 1;
+                    println!("found target, {}", found_target);
+                    if found_target >= 5 {
+                        max_qps = current_qps;
+                        break;
+                    }
+                    delta_qps = 1;
+                }
+                current_qps -= delta_qps;
+                println!("Decreasing QPS to {}", current_qps);
+            }
+            pool.store(current_qps, atomic::Ordering::Release);
+            thread::sleep(Duration::from_secs(1));
+        }
+        stop_clone.store(true, std::sync::atomic::Ordering::Release);
+    });
 
     println!("Maximum QPS: {}", max_qps);
 
