@@ -50,8 +50,8 @@ fn main() -> Result<()> {
     let path = "/tmp/test_rucene";
     let dir_path = Path::new(path);
     // if dir_path.exists() {
-    //     fs::remove_dir_all(&dir_path)?;
-    //     fs::create_dir(&dir_path)?;
+        // fs::remove_dir_all(&dir_path)?;
+        fs::create_dir(&dir_path)?;
     // }
 
     // let worker_count = std::env::args()
@@ -81,13 +81,13 @@ fn main() -> Result<()> {
             let timestamp: &i64 = &lines.next().unwrap().unwrap().parse().unwrap();
             let numeric_field = new_index_numeric_field("timestamp".into(), *timestamp);
             let mut doc: Vec<Box<dyn Fieldable>> = vec![];
-            // doc.push(Box::new(numeric_field));
+            doc.push(Box::new(numeric_field));
 
-            // writer.add_document(doc)?;
+            writer.add_document(doc)?;
 
-            // if n > 0 && n % 1000000 == 0 {
-            //     writer.commit()?;
-            // }
+            if n > 0 && n % 1000000 == 0 {
+                writer.commit()?;
+            }
         }
         let num_queries: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
 

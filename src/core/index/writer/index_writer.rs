@@ -1684,9 +1684,9 @@ where
     ) -> Result<bool> {
         let mut processed = false;
         if index_writer.writer.tragedy.is_none() {
-            while let event = index_writer.writer.doc_writer.events.pop() {
+            while let Some(event) = index_writer.writer.doc_writer.events.pop() {
                 processed = true;
-                event.unwrap().process(index_writer, trigger_merge, force_purge)?;
+                event.process(index_writer, trigger_merge, force_purge)?;
             }
         }
 
