@@ -65,9 +65,9 @@ fn main() -> Result<()> {
 
         for n in 0..*num_docs {
             let timestamp: &i64 = &lines.next().unwrap().unwrap().parse().unwrap();
-            // let numeric_field = new_index_numeric_field("timestamp".into(), *timestamp);
-            // let mut doc: Vec<Box<dyn Fieldable>> = vec![];
-            // doc.push(Box::new(numeric_field));
+            let numeric_field = new_index_numeric_field("timestamp".into(), *timestamp);
+            let mut doc: Vec<Box<dyn Fieldable>> = vec![];
+            doc.push(Box::new(numeric_field));
 
             // writer.add_document(doc)?;
 
@@ -77,7 +77,7 @@ fn main() -> Result<()> {
         }
         let num_queries: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
 
-        for _ in 0..*num_queries {
+        for i in 0..*num_queries {
             let l = lines.next().unwrap().unwrap();
 
             let mut range = l.split(',');
@@ -95,6 +95,10 @@ fn main() -> Result<()> {
                 lower_bound,
                 upper_bound,
             ));
+
+            if i == 1000{
+                break;
+            }
         }
 
         let reader = writer.get_reader(true, false)?;

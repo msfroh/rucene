@@ -24,7 +24,7 @@ use rucene::error::Result;
 fn indexed_numeric_field_type() -> FieldType {
     let mut field_type = FieldType::default();
     field_type.tokenized = false;
-    field_type.doc_values_type = DocValuesType::Binary;
+    field_type.doc_values_type = DocValuesType::Null;
     field_type.dimension_count = 1;
     field_type.dimension_num_bytes = 8;
     field_type
@@ -49,10 +49,10 @@ fn main() -> Result<()> {
     // create index directory
     let path = "/tmp/test_rucene";
     let dir_path = Path::new(path);
-    // if dir_path.exists() {
-        // fs::remove_dir_all(&dir_path)?;
+    if dir_path.exists() {
+        fs::remove_dir_all(&dir_path)?;
         fs::create_dir(&dir_path)?;
-    // }
+    }
 
     // let worker_count = std::env::args()
     //     .nth(1)
@@ -190,8 +190,8 @@ fn main() -> Result<()> {
             // main_thread_clone.unpark();
         }
 
-        let mut current_qps = 4000;
-        let mut delta_qps = 200;
+        let mut current_qps = 4800;
+        let mut delta_qps = 100;
         let mut found_target = 0;
 
         pool.store(current_qps, atomic::Ordering::Release);
