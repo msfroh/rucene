@@ -8,16 +8,17 @@ use rucene::core::search::query::{self, LongPoint, Query};
 use rucene::core::search::{DefaultIndexSearcher, IndexSearcher};
 use rucene::core::store::directory::FSDirectory;
 
-use std::borrow::Borrow;
-use std::convert::TryInto;
+use std::alloc::alloc;
+use std::alloc::dealloc;
+use std::alloc::Layout;
 use std::fs::{self, File};
 use std::io::{self, BufRead, Error};
 use std::ops::Deref;
 use std::path::Path;
-use std::sync::atomic::{self, AtomicBool, AtomicI32};
+use std::sync::atomic::{self, AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use std::{cmp, env, thread};
+use std::{cmp, env, ptr, thread};
 
 use rucene::error::Result;
 
@@ -54,17 +55,21 @@ fn main() -> Result<()> {
         fs::create_dir(&dir_path)?;
     }
 
-    // let worker_count = std::env::args()
-    //     .nth(1)
-    //     .ok_or(Error::new(
-    //         std::io::ErrorKind::Other,
-    //         "Missing worker count argument",
-    //     ))?
-    //     .parse::<usize>()?;
+    let worker_count = std::env::args()
+        .nth(1)
+        .ok_or(Error::new(
+            std::io::ErrorKind::Other,
+            "Missing worker count argument",
+        ))?
+        .parse::<usize>()?;
 
-    let worker_count = 48;
-
-    let main_thread = thread::current();
+    let max_memory_bytes: usize = std::env::args()
+        .nth(2)
+        .ok_or(Error::new(
+            std::io::ErrorKind::Other,
+            "Missing memory argument",
+        ))?
+        .parse::<usize>()? * 1024 * 1024;
 
     // create index writer
     let config = Arc::new(IndexWriterConfig::default());
@@ -109,7 +114,6 @@ fn main() -> Result<()> {
                 lower_bound,
                 upper_bound,
             ));
-
         }
     }
 
@@ -142,34 +146,42 @@ fn main() -> Result<()> {
 
     let stop_clone = stop.clone();
 
-    // let mut worker_handles = vec![];
-
     let mut max_qps = 1;
+    let search_count = Arc::new(AtomicUsize::new(0));
+    let search_count_time = Arc::new(AtomicUsize::new(0));
 
     thread::scope(|s| {
         for i in 0..worker_count {
             let stop_clone = stop.clone();
             let pool_clone = pool.clone();
             let searcher_clone = index_searcher.clone();
-            let main_thread_clone = main_thread.clone();
             let start_pos = query_offset * i;
             let queries_clone = queries.clone();
+            let search_count_clone = search_count.clone();
+            let search_count_time_clone = search_count_time.clone();
 
             s.spawn(move || {
                 // let mut start_pos_clone = start_pos.clone();
                 let mut pos = start_pos.clone();
+
                 while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
                     let mut wait = true;
                     if pool_clone.load(atomic::Ordering::Acquire) > 0 {
-                        // let val = *pool_clone;
-                        // let val = pool_clone.load(atomic::Ordering::AcqRel);
                         if pool_clone.fetch_sub(1, atomic::Ordering::AcqRel) >= 1 {
                             let mut manager = TopDocsCollector::new(10);
                             let query = queries_clone.read().unwrap();
                             let t = query.get(pos);
                             let q = t.unwrap();
                             let r = q.as_ref().unwrap();
-                            searcher_clone.search(&**r, &mut manager).unwrap();
+                            let start_time: Instant = Instant::now();
+                            searcher_clone.search(&**r, &mut manager);
+                            let time: Duration = Instant::now().duration_since(start_time);
+                            search_count_time_clone.fetch_add(
+                                time.as_millis() as usize,
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
+                            search_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
                             pos += 1;
                             // sum += manager.top_docs().total_hits() as i64;
                             if pos >= queries_clone.read().unwrap().len() {
@@ -184,19 +196,65 @@ fn main() -> Result<()> {
                         thread::park_timeout(Duration::from_millis(50));
                     }
                 }
-
-                // worker_handles.push(handle);
             });
-            // main_thread_clone.unpark();
         }
 
-        let mut current_qps = 4800;
-        let mut delta_qps = 100;
+        let mut current_qps = 500;
+        let mut delta_qps = 500;
         let mut found_target = 0;
 
         pool.store(current_qps, atomic::Ordering::Release);
 
         thread::sleep(Duration::from_secs(1));
+
+        // let max_memory_bytes: usize = 1024 * 1024 * 2;
+
+        let bytes_per_entry: usize = 1024;
+        let new_stop = stop.clone();
+        s.spawn(move || {
+            let mut short_lived_objects: Vec<*mut u8> = Vec::new();
+            let mut long_lived_objects: Vec<*mut u8> = Vec::new();
+            let mut current_cycle_number: usize = 0;
+            while !new_stop.load(std::sync::atomic::Ordering::Acquire) {
+                println!("allocating mem");
+                let num_entries = max_memory_bytes / bytes_per_entry;
+                if !short_lived_objects.is_empty() {
+                    for ptr in short_lived_objects.drain(..) {
+                        unsafe {
+                            dealloc(ptr, Layout::from_size_align_unchecked(bytes_per_entry, 1));
+                        }
+                    }
+                } else {
+                    for _ in 0..num_entries {
+                        let ptr =
+                            unsafe { alloc(Layout::from_size_align_unchecked(bytes_per_entry, 1)) };
+                        if !ptr.is_null() {
+                            unsafe { ptr::write_bytes(ptr, 0, bytes_per_entry) };
+                            short_lived_objects.push(ptr);
+                        }
+                    }
+                }
+                if current_cycle_number % 5000 == 0 {
+                    for ptr in long_lived_objects.drain(..) {
+                        unsafe {
+                            dealloc(ptr, Layout::from_size_align_unchecked(bytes_per_entry, 1));
+                        }
+                    }
+                    println!("Allocating old gen");
+                    for _ in 0..(num_entries / 4) {
+                        let ptr =
+                            unsafe { alloc(Layout::from_size_align_unchecked(bytes_per_entry, 1)) };
+                        if !ptr.is_null() {
+                            unsafe { ptr::write_bytes(ptr, 0, bytes_per_entry) };
+                            long_lived_objects.push(ptr);
+                        }
+                    }
+                }
+
+                current_cycle_number += 1;
+                thread::sleep(Duration::from_secs(1));
+            }
+        });
 
         loop {
             println!("pool size, {}", pool.load(atomic::Ordering::Acquire));
@@ -224,6 +282,12 @@ fn main() -> Result<()> {
     });
 
     println!("Maximum QPS: {}", max_qps);
+
+    println!(
+        "QPS computed: {}",
+        ((search_count.load(Ordering::Relaxed) * 1000) / search_count_time.load(Ordering::Relaxed))
+            * worker_count
+    );
 
     Ok(())
 }
