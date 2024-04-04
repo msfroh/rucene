@@ -69,7 +69,16 @@ fn main() -> Result<()> {
             std::io::ErrorKind::Other,
             "Missing memory argument",
         ))?
-        .parse::<usize>()? * 1024 * 1024;
+        .parse::<usize>()?
+        * 1024
+        * 1024;
+
+    let enableMemoryAllocation = std::env::args()
+        .nth(3)
+        .ok_or(Error::new(
+            std::io::ErrorKind::Other,
+            "Missing memory argument",
+        ))?;
 
     // create index writer
     let config = Arc::new(IndexWriterConfig::default());
@@ -211,50 +220,54 @@ fn main() -> Result<()> {
 
         let bytes_per_entry: usize = 1024;
         let new_stop = stop.clone();
-        s.spawn(move || {
-            let mut short_lived_objects: Vec<*mut u8> = Vec::new();
-            let mut long_lived_objects: Vec<*mut u8> = Vec::new();
-            let mut current_cycle_number: usize = 0;
-            while !new_stop.load(std::sync::atomic::Ordering::Acquire) {
-                println!("allocating mem");
-                let num_entries = max_memory_bytes / bytes_per_entry;
-                if !short_lived_objects.is_empty() {
-                    for ptr in short_lived_objects.drain(..) {
-                        unsafe {
-                            dealloc(ptr, Layout::from_size_align_unchecked(bytes_per_entry, 1));
+        if enableMemoryAllocation == "true" {
+            s.spawn(move || {
+                let mut short_lived_objects: Vec<*mut u8> = Vec::new();
+                let mut long_lived_objects: Vec<*mut u8> = Vec::new();
+                let mut current_cycle_number: usize = 0;
+                while !new_stop.load(std::sync::atomic::Ordering::Acquire) {
+                    println!("allocating mem");
+                    let num_entries = max_memory_bytes / bytes_per_entry;
+                    if !short_lived_objects.is_empty() {
+                        for ptr in short_lived_objects.drain(..) {
+                            unsafe {
+                                dealloc(ptr, Layout::from_size_align_unchecked(bytes_per_entry, 1));
+                            }
+                        }
+                    } else {
+                        for _ in 0..num_entries {
+                            let ptr = unsafe {
+                                alloc(Layout::from_size_align_unchecked(bytes_per_entry, 1))
+                            };
+                            if !ptr.is_null() {
+                                unsafe { ptr::write_bytes(ptr, 0, bytes_per_entry) };
+                                short_lived_objects.push(ptr);
+                            }
                         }
                     }
-                } else {
-                    for _ in 0..num_entries {
-                        let ptr =
-                            unsafe { alloc(Layout::from_size_align_unchecked(bytes_per_entry, 1)) };
-                        if !ptr.is_null() {
-                            unsafe { ptr::write_bytes(ptr, 0, bytes_per_entry) };
-                            short_lived_objects.push(ptr);
+                    if current_cycle_number % 5000 == 0 {
+                        for ptr in long_lived_objects.drain(..) {
+                            unsafe {
+                                dealloc(ptr, Layout::from_size_align_unchecked(bytes_per_entry, 1));
+                            }
+                        }
+                        println!("Allocating old gen");
+                        for _ in 0..(num_entries / 4) {
+                            let ptr = unsafe {
+                                alloc(Layout::from_size_align_unchecked(bytes_per_entry, 1))
+                            };
+                            if !ptr.is_null() {
+                                unsafe { ptr::write_bytes(ptr, 0, bytes_per_entry) };
+                                long_lived_objects.push(ptr);
+                            }
                         }
                     }
-                }
-                if current_cycle_number % 5000 == 0 {
-                    for ptr in long_lived_objects.drain(..) {
-                        unsafe {
-                            dealloc(ptr, Layout::from_size_align_unchecked(bytes_per_entry, 1));
-                        }
-                    }
-                    println!("Allocating old gen");
-                    for _ in 0..(num_entries / 4) {
-                        let ptr =
-                            unsafe { alloc(Layout::from_size_align_unchecked(bytes_per_entry, 1)) };
-                        if !ptr.is_null() {
-                            unsafe { ptr::write_bytes(ptr, 0, bytes_per_entry) };
-                            long_lived_objects.push(ptr);
-                        }
-                    }
-                }
 
-                current_cycle_number += 1;
-                thread::sleep(Duration::from_secs(1));
-            }
-        });
+                    current_cycle_number += 1;
+                    thread::sleep(Duration::from_secs(1));
+                }
+            });
+        }
 
         loop {
             println!("pool size, {}", pool.load(atomic::Ordering::Acquire));
