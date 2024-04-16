@@ -119,7 +119,7 @@ impl FloatPoint {
         sortable_int2float(sortable_bytes2int(value))
     }
 
-    fn pack(point: &[f32]) -> Vec<u8> {
+    pub fn pack(point: &[f32]) -> Vec<u8> {
         assert!(!point.is_empty());
         let mut packed = vec![0u8; point.len() * 4];
         for dim in 0..point.len() {
