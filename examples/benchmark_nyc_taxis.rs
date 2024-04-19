@@ -437,7 +437,7 @@ fn indexing() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn querying() -> Result<(), Box<dyn std::error::Error>> {
-    let path = "/home/ec2-user/test_rucene";
+    let path = "/tmp/test_rucene";
     let dir_path = Path::new(path);
 
     let directory = Arc::new(FSDirectory::with_path(&dir_path)?);
@@ -470,7 +470,7 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
         index_searcher.search(&query1, &mut collector)?;
         hits += collector.top_docs().total_hits();
     }
-    let query = DoublePoint::new_range_query("total_amount".into(), 5 as f64, 15 as f64).unwrap();
+    let query = DoublePoint::new_range_query("totalAmount".into(), 5.0, 15.0).unwrap();
     let mut collector = TopDocsCollector::new(2000);
     for i in 0..499 {
         index_searcher.search(&*query, &mut collector)?;
