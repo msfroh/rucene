@@ -5,6 +5,8 @@ extern crate serde_json;
 use rucene::core::analysis::WhitespaceTokenizer;
 use rucene::core::codec::CodecEnum;
 use rucene::core::doc::{DocValuesType, Field, FieldType, Fieldable, IndexOptions, Term};
+use rucene::core::index::merge::{SerialMergeScheduler, TieredMergePolicy};
+use rucene::core::index::reader::StandardDirectoryReader;
 use rucene::core::index::writer::{IndexWriter, IndexWriterConfig};
 use rucene::core::search::collector::TopDocsCollector;
 use rucene::core::search::query::{
@@ -349,96 +351,107 @@ fn process_chunk(
 
     Ok(())
 }
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // create index directory
-    // let path = "/tmp/test_rucene";
-    // let dir_path = Path::new(path);
-    // if dir_path.exists() {
-    //     fs::remove_dir_all(&dir_path)?;
-    //     fs::create_dir(&dir_path)?;
-    // }
 
-    // if let Ok(file) = File::open("/home/hvamsi/code/rucene/data/documents.json") {
-    //     let start_time: Instant = Instant::now();
+fn indexing() -> Result<(), Box<dyn std::error::Error>> {
+    let path = "/tmp/test_rucene";
+    let dir_path = Path::new(path);
+    if dir_path.exists() {
+        fs::remove_dir_all(&dir_path)?;
+        fs::create_dir(&dir_path)?;
+    }
 
-    //     let mut reader = BufReader::new(file);
+    if let Ok(file) = File::open("/home/hvamsi/code/rucene/data/documents.json") {
+        let start_time: Instant = Instant::now();
 
-    //     let batch_size = 1_000_000; // Adjust this value as needed
+        let mut reader = BufReader::new(file);
 
-    //     let num_threads = 48; // Get the number of CPU cores
+        let batch_size = 1_000_000; // Adjust this value as needed
 
-    //     let mut buffer = String::new();
-    //     let documents = Arc::new(Mutex::new(Vec::new()));
-    //     let writers = Arc::new(Mutex::new(Vec::new()));
+        let num_threads = 48; // Get the number of CPU cores
 
-    //     // let mut batch = Vec::with_capacity(batch_size);
+        let mut buffer = String::new();
+        let documents = Arc::new(Mutex::new(Vec::new()));
+        let writers = Arc::new(Mutex::new(Vec::new()));
 
-    //     let (tx, rx) = unbounded::<String>();
+        // let mut batch = Vec::with_capacity(batch_size);
 
-    //     let workers = (0..num_threads)
-    //         .map(|_| {
-    //             let rx = rx.clone();
+        let (tx, rx) = unbounded::<String>();
 
-    //             let documents_clone = documents.clone();
-    //             let writers_clone = writers.clone();
+        let workers = (0..num_threads)
+            .map(|_| {
+                let rx = rx.clone();
 
-    //             thread::spawn(move || {
-    //                 for batch in rx {
-    //                     println!("{:#?}", batch);
-    //                     if let Err(e) = process_chunk(&batch, &documents_clone, &writers_clone) {
-    //                         eprintln!("Error processing chunk: {}", e);
-    //                     }
-    //                 }
-    //             })
-    //         })
-    //         .collect::<Vec<_>>();
+                let documents_clone = documents.clone();
+                let writers_clone = writers.clone();
 
-    //     let mut i = 0;
-    //     loop {
-    //         buffer.clear();
+                thread::spawn(move || {
+                    for batch in rx {
+                        println!("{:#?}", batch);
+                        if let Err(e) = process_chunk(&batch, &documents_clone, &writers_clone) {
+                            eprintln!("Error processing chunk: {}", e);
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
 
-    //         match reader.read_line(&mut buffer) {
-    //             Ok(0) => {
-    //                 let writer = writers.clone().lock().unwrap().pop().unwrap();
-    //                 if writer.has_uncommitted_changes(){
-    //                     writer.commit();
-    //                 }
-    //                 break;
-    //             } // End of file
+        let mut i = 0;
+        loop {
+            buffer.clear();
 
-    //             Ok(_) => {
-    //                 i += 1;
-    //                 tx.send(buffer.clone()).unwrap();
-    //                 if i == COMMIT_BATCH_SIZE {
-    //                     let writer = writers.clone().lock().unwrap().pop().unwrap();
-    //                     writer.commit();
-    //                 }
-    //             }
+            match reader.read_line(&mut buffer) {
+                Ok(0) => {
+                    let writer = writers.clone().lock().unwrap().pop().unwrap();
+                    if writer.has_uncommitted_changes() {
+                        writer.commit();
+                    }
+                    break;
+                } // End of file
 
-    //             Err(e) => panic!("Error reading file: {}", e),
-    //         }
-    //     }
+                Ok(_) => {
+                    i += 1;
+                    tx.send(buffer.clone()).unwrap();
+                    if i == COMMIT_BATCH_SIZE {
+                        let writer = writers.clone().lock().unwrap().pop().unwrap();
+                        writer.commit();
+                    }
+                }
 
-    //     drop(tx); // Signal the end of input
+                Err(e) => panic!("Error reading file: {}", e),
+            }
+        }
 
-    //     for worker in workers {
-    //         worker.join().unwrap();
-    //     }
+        drop(tx); // Signal the end of input
 
-    //     let time = Instant::now().duration_since(start_time).as_secs_f32();
+        for worker in workers {
+            worker.join().unwrap();
+        }
 
-    //     println!("indexing time, {}", time);
-    // }
+        let time = Instant::now().duration_since(start_time).as_secs_f32();
+
+        println!("indexing time, {}", time);
+    }
 
     let config = Arc::new(IndexWriterConfig::default());
+    Ok(())
+}
 
+fn querying() -> Result<(), Box<dyn std::error::Error>> {
     let path = "/tmp/test_rucene";
     let dir_path = Path::new(path);
 
     let directory = Arc::new(FSDirectory::with_path(&dir_path)?);
 
-    let writer = IndexWriter::new(directory, config)?;
-    let reader = writer.get_reader(true, false)?;
+    // let dir_reader: StandardDirectoryReader<FSDirectory, CodecEnum,
+    // SerialMergeScheduler,TieredMergePolicy > = StandardDirectoryReader::open(directory).unwrap();
+
+    // let writer = IndexWriter::new(directory, config)?;
+    let reader: StandardDirectoryReader<
+        FSDirectory,
+        CodecEnum,
+        SerialMergeScheduler,
+        TieredMergePolicy,
+    > = StandardDirectoryReader::open(directory).unwrap();
     let index_searcher = DefaultIndexSearcher::new(Arc::new(reader), None);
     // let warmupCount = cmp::min(1000, queries.len());
 
@@ -450,22 +463,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut hits: u64 = 0;
 
-    let mut collector = TopDocsCollector::new(170_000_000);
+    let mut collector = TopDocsCollector::new(2000);
     let overall_start = Instant::now();
     let query1 = MatchAllDocsQuery;
-    for i in 0..100 {
+    for i in 0..499 {
         index_searcher.search(&query1, &mut collector)?;
     }
     let query = DoublePoint::new_range_query("total_amount".into(), 5 as f64, 15 as f64).unwrap();
-    for i in 0..100 {
+    let mut collector = TopDocsCollector::new(2000);
+    for i in 0..499 {
         index_searcher.search(&*query, &mut collector)?;
     }
-    println!("{}", Instant::now().duration_since(overall_start).as_nanos());
-
-    // hits += collector.top_docs().total_hits() as u64;
-    // }
-
-    println!("{}", hits);
+    println!(
+        "{}",
+        Instant::now().duration_since(overall_start).as_nanos()
+    );
+    Ok(())
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    querying();
 
     Ok(())
 }
