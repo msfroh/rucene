@@ -2,9 +2,11 @@ extern crate rucene;
 
 use rucene::core::codec::CodecEnum;
 use rucene::core::doc::{DocValuesType, Field, FieldType, Fieldable};
+use rucene::core::index::merge::{SerialMergeScheduler, TieredMergePolicy};
+use rucene::core::index::reader::StandardDirectoryReader;
 use rucene::core::index::writer::{IndexWriter, IndexWriterConfig};
 use rucene::core::search::collector::TopDocsCollector;
-use rucene::core::search::query::{self, LongPoint, Query};
+use rucene::core::search::query::{self, DoublePoint, LongPoint, Query};
 use rucene::core::search::{DefaultIndexSearcher, IndexSearcher};
 use rucene::core::store::directory::FSDirectory;
 
@@ -48,7 +50,7 @@ where
 }
 fn main() -> Result<()> {
     // create index directory
-    let path = "/tmp/test_rucene";
+    let path = "/home/ec2-user/test_rucene";
     let dir_path = Path::new(path);
     if dir_path.exists() {
         fs::remove_dir_all(&dir_path)?;
@@ -73,58 +75,64 @@ fn main() -> Result<()> {
         * 1024
         * 1024;
 
-    let enableMemoryAllocation = std::env::args()
-        .nth(3)
-        .ok_or(Error::new(
-            std::io::ErrorKind::Other,
-            "Missing memory argument",
-        ))?;
+    let enableMemoryAllocation = std::env::args().nth(2).ok_or(Error::new(
+        std::io::ErrorKind::Other,
+        "Missing memory argument",
+    ))?;
 
     // create index writer
     let config = Arc::new(IndexWriterConfig::default());
     let directory = Arc::new(FSDirectory::with_path(&dir_path)?);
     let writer = IndexWriter::new(directory, config)?;
 
-    let queries = Arc::new(RwLock::new(vec![]));
+    //     let reader: StandardDirectoryReader<
+    //     FSDirectory,
+    //     CodecEnum,
+    //     SerialMergeScheduler,
+    //     TieredMergePolicy,
+    // > = StandardDirectoryReader::open(directory).unwrap();
+    // let index_searcher = DefaultIndexSearcher::new(Arc::new(reader), None);
 
-    if let Ok(mut lines) = read_lines("../range_datapoints") {
-        let num_docs: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
-        // Consumes the iterator, returns an (Optional) String
+    // let queries = Arc::new(RwLock::new(vec![]));
 
-        for n in 0..*num_docs {
-            let timestamp: &i64 = &lines.next().unwrap().unwrap().parse().unwrap();
-            let numeric_field = new_index_numeric_field("timestamp".into(), *timestamp);
-            let mut doc: Vec<Box<dyn Fieldable>> = vec![];
-            doc.push(Box::new(numeric_field));
+    // if let Ok(mut lines) = read_lines("../range_datapoints") {
+    //     let num_docs: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
+    //     // Consumes the iterator, returns an (Optional) String
 
-            writer.add_document(doc)?;
+    //     for n in 0..*num_docs {
+    //         let timestamp: &i64 = &lines.next().unwrap().unwrap().parse().unwrap();
+    //         let numeric_field = new_index_numeric_field("timestamp".into(), *timestamp);
+    //         let mut doc: Vec<Box<dyn Fieldable>> = vec![];
+    //         doc.push(Box::new(numeric_field));
 
-            if n > 0 && n % 1000000 == 0 {
-                writer.commit()?;
-            }
-        }
-        let num_queries: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
+    //         writer.add_document(doc)?;
 
-        for i in 0..*num_queries {
-            let l = lines.next().unwrap().unwrap();
+    //         if n > 0 && n % 1000000 == 0 {
+    //             writer.commit()?;
+    //         }
+    //     }
+    //     let num_queries: &i32 = &lines.next().unwrap().unwrap().parse().unwrap();
 
-            let mut range = l.split(',');
+    //     for i in 0..*num_queries {
+    //         let l = lines.next().unwrap().unwrap();
 
-            let lower = range.next().unwrap();
+    //         let mut range = l.split(',');
 
-            let lower_bound: i64 = lower.parse::<i64>().unwrap();
+    //         let lower = range.next().unwrap();
 
-            let upper = range.next().unwrap();
+    //         let lower_bound: i64 = lower.parse::<i64>().unwrap();
 
-            let upper_bound: i64 = upper.parse::<i64>().unwrap();
+    //         let upper = range.next().unwrap();
 
-            queries.write().unwrap().push(LongPoint::new_range_query(
-                "timestamp".into(),
-                lower_bound,
-                upper_bound,
-            ));
-        }
-    }
+    //         let upper_bound: i64 = upper.parse::<i64>().unwrap();
+
+    //         queries.write().unwrap().push(LongPoint::new_range_query(
+    //             "timestamp".into(),
+    //             lower_bound,
+    //             upper_bound,
+    //         ));
+    //     }
+    // }
 
     let reader = writer.get_reader(true, false)?;
     let index_searcher: Arc<
@@ -150,7 +158,7 @@ fn main() -> Result<()> {
 
     let pool = Arc::new(AtomicI32::new(0));
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let query_offset = queries.read().unwrap().len() / worker_count;
+    // let query_offset = queries.read().unwrap().len() / worker_count;
     let mut sum = 0;
 
     let stop_clone = stop.clone();
@@ -164,26 +172,29 @@ fn main() -> Result<()> {
             let stop_clone = stop.clone();
             let pool_clone = pool.clone();
             let searcher_clone = index_searcher.clone();
-            let start_pos = query_offset * i;
-            let queries_clone = queries.clone();
+            // let start_pos = query_offset * i;
+            // let queries_clone = queries.clone();
             let search_count_clone = search_count.clone();
             let search_count_time_clone = search_count_time.clone();
 
             s.spawn(move || {
                 // let mut start_pos_clone = start_pos.clone();
-                let mut pos = start_pos.clone();
+                // let mut pos = start_pos.clone();
 
                 while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
                     let mut wait = true;
                     if pool_clone.load(atomic::Ordering::Acquire) > 0 {
                         if pool_clone.fetch_sub(1, atomic::Ordering::AcqRel) >= 1 {
-                            let mut manager = TopDocsCollector::new(10);
-                            let query = queries_clone.read().unwrap();
-                            let t = query.get(pos);
-                            let q = t.unwrap();
-                            let r = q.as_ref().unwrap();
+                            let mut manager = TopDocsCollector::new(2000);
+                            // let query = queries_clone.read().unwrap();
+                            // let t = query.get(pos);
+                            // let q = t.unwrap();
+                            // let r = q.as_ref().unwrap();
                             let start_time: Instant = Instant::now();
-                            searcher_clone.search(&**r, &mut manager);
+                            let query: Box<dyn Query<CodecEnum>> =
+                                DoublePoint::new_range_query("totalAmount".into(), 5.0, 15.0)
+                                    .unwrap();
+                            searcher_clone.search(&*query, &mut manager);
                             let time: Duration = Instant::now().duration_since(start_time);
                             search_count_time_clone.fetch_add(
                                 time.as_millis() as usize,
@@ -191,11 +202,11 @@ fn main() -> Result<()> {
                             );
                             search_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                            pos += 1;
-                            // sum += manager.top_docs().total_hits() as i64;
-                            if pos >= queries_clone.read().unwrap().len() {
-                                pos = 0;
-                            }
+                            // pos += 1;
+                            // // sum += manager.top_docs().total_hits() as i64;
+                            // if pos >= queries_clone.read().unwrap().len() {
+                            //     pos = 0;
+                            // }
                             wait = false;
                         } else {
                             pool_clone.fetch_add(1, atomic::Ordering::AcqRel);

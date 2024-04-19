@@ -10,7 +10,8 @@ use rucene::core::index::reader::StandardDirectoryReader;
 use rucene::core::index::writer::{IndexWriter, IndexWriterConfig};
 use rucene::core::search::collector::TopDocsCollector;
 use rucene::core::search::query::{
-    self, DoublePoint, FloatPoint, LongPoint, MatchAllDocsQuery, PointRangeQuery, Query, TermQuery,
+    self, BooleanQuery, DoublePoint, FloatPoint, LongPoint, MatchAllDocsQuery, PointRangeQuery,
+    Query, TermQuery,
 };
 use rucene::core::search::{DefaultIndexSearcher, IndexSearcher};
 use rucene::core::store::directory::{self, FSDirectory};
@@ -465,24 +466,32 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut collector = TopDocsCollector::new(2000);
     let overall_start = Instant::now();
-    let query1 = MatchAllDocsQuery;
-    for i in 0..499 {
-        index_searcher.search(&query1, &mut collector)?;
-        hits += collector.top_docs().total_hits();
-    }
-    let query = DoublePoint::new_range_query("totalAmount".into(), 5.0, 15.0).unwrap();
+    // let query1 = MatchAllDocsQuery;
+    // for i in 0..499 {
+    //     index_searcher.search(&query1, &mut collector)?;
+    //     hits += collector.top_docs().total_hits();
+    // }
+    // let query: Box<dyn Query<CodecEnum>> =
+    //     DoublePoint::new_range_query("totalAmount".into(), 5.0, 15.0).unwrap();
+    // let mut collector = TopDocsCollector::new(2000);
+    // for i in 0..499 {
+    //     index_searcher.search(&*query, &mut collector)?;
+    //     hits += collector.top_docs().total_hits();
+    // }
+    let trip_range_query: Box<dyn Query<CodecEnum>> =
+        DoublePoint::new_range_query("tripDistance".into(), 0.0, 50.0).unwrap();
+
+    let query = BooleanQuery::build(vec![], vec![], vec![trip_range_query], vec![], 1).unwrap();
     let mut collector = TopDocsCollector::new(2000);
-    for i in 0..499 {
-        index_searcher.search(&*query, &mut collector)?;
-        hits += collector.top_docs().total_hits();
-    }
+    // for i in 0..1 {
+    //     index_searcher.search(&*query, &mut collector)?;
+    //     hits += collector.top_docs().total_hits();
+    // }
     println!(
         "{}",
         Instant::now().duration_since(overall_start).as_nanos()
-    );    println!(
-        "Total hits: {}",
-        hits
     );
+    println!("Total hits: {}", hits);
     Ok(())
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
