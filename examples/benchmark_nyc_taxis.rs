@@ -437,7 +437,7 @@ fn indexing() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn querying() -> Result<(), Box<dyn std::error::Error>> {
-    let path = "/tmp/test_rucene";
+    let path = "/home/ec2-user/test_rucene";
     let dir_path = Path::new(path);
 
     let directory = Arc::new(FSDirectory::with_path(&dir_path)?);
