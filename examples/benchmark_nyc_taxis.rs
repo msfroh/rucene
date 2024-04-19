@@ -461,22 +461,27 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
     //     index_searcher.search(&**query, &mut collector);
     // }
 
-    let mut hits: u64 = 0;
+    let mut hits: usize = 0;
 
     let mut collector = TopDocsCollector::new(2000);
     let overall_start = Instant::now();
     let query1 = MatchAllDocsQuery;
     for i in 0..499 {
         index_searcher.search(&query1, &mut collector)?;
+        hits += collector.top_docs().total_hits();
     }
     let query = DoublePoint::new_range_query("total_amount".into(), 5 as f64, 15 as f64).unwrap();
     let mut collector = TopDocsCollector::new(2000);
     for i in 0..499 {
         index_searcher.search(&*query, &mut collector)?;
+        hits += collector.top_docs().total_hits();
     }
     println!(
         "{}",
         Instant::now().duration_since(overall_start).as_nanos()
+    );    println!(
+        "Total hits: {}",
+        hits
     );
     Ok(())
 }
