@@ -5,9 +5,8 @@ extern crate serde_json;
 use rucene::core::analysis::WhitespaceTokenizer;
 use rucene::core::codec::CodecEnum;
 use rucene::core::doc::{DocValuesType, Field, FieldType, Fieldable, IndexOptions, Term};
-use rucene::core::highlight::FieldQuery;
 use rucene::core::index::merge::{SerialMergeScheduler, TieredMergePolicy};
-use rucene::core::index::reader::{IndexReader, StandardDirectoryReader};
+use rucene::core::index::reader::StandardDirectoryReader;
 use rucene::core::index::writer::{IndexWriter, IndexWriterConfig};
 use rucene::core::search::collector::TopDocsCollector;
 use rucene::core::search::query::{
@@ -27,8 +26,7 @@ use std::convert::TryInto;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
-use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
-use std::sync::{atomic, mpsc, Arc, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use std::{cmp, env, ptr, thread};
 
@@ -445,158 +443,56 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
 
     let directory = Arc::new(FSDirectory::with_path(&dir_path)?);
 
+    // let dir_reader: StandardDirectoryReader<FSDirectory, CodecEnum,
+    // SerialMergeScheduler,TieredMergePolicy > = StandardDirectoryReader::open(directory).unwrap();
+
+    // let writer = IndexWriter::new(directory, config)?;
     let reader: StandardDirectoryReader<
         FSDirectory,
         CodecEnum,
         SerialMergeScheduler,
         TieredMergePolicy,
     > = StandardDirectoryReader::open(directory).unwrap();
-    let index_searcher: Arc<
-        DefaultIndexSearcher<
-            CodecEnum,
-            rucene::core::index::reader::StandardDirectoryReader<
-                FSDirectory,
-                CodecEnum,
-                rucene::core::index::merge::SerialMergeScheduler,
-                rucene::core::index::merge::TieredMergePolicy,
-            >,
-            Arc<
-                rucene::core::index::reader::StandardDirectoryReader<
-                    FSDirectory,
-                    CodecEnum,
-                    rucene::core::index::merge::SerialMergeScheduler,
-                    rucene::core::index::merge::TieredMergePolicy,
-                >,
-            >,
-            rucene::core::search::DefaultSimilarityProducer,
-        >,
-    > = Arc::new(DefaultIndexSearcher::new(Arc::new(reader), None));
+    let index_searcher = DefaultIndexSearcher::new(Arc::new(reader), None);
+    // let warmupCount = cmp::min(1000, queries.len());
+
+    // for i in 0..warmupCount {
+    //     let mut collector = TopDocsCollector::new(10);
+    //     let query = queries.get(i).unwrap().as_ref().unwrap();
+    //     index_searcher.search(&**query, &mut collector);
+    // }
+
     let mut hits: usize = 0;
 
-    let range = Path::new("/home/hvamsi/code/rucene/data/test_range.txt");
-
-    let file = File::open(range).expect("Failed to open file");
-
-    let buf_reader = BufReader::new(file);
-
-    // Read the file line by line
-
-    let queries = Arc::new(RwLock::new(vec![]));
-
+    let mut collector = TopDocsCollector::new(2000);
     let overall_start = Instant::now();
-    for line in buf_reader.lines() {
-        let lower_bound: f64 = line.unwrap().parse::<f64>().unwrap();
-        let upper_bound: f64 = lower_bound + 5000.0;
-        println!("{}, {}", lower_bound, upper_bound);
-        let query =
-            DoublePoint::new_range_query("totalAmount".into(), lower_bound, upper_bound).unwrap();
-        queries.write().unwrap().push(query);
+    let query1 = MatchAllDocsQuery;
+    for i in 0..500 {
+        let mut collector = TopDocsCollector::new(2000);
+        index_searcher.search(&query1, &mut collector)?;
+        hits += collector.top_docs().total_hits();
     }
+    // let query: Box<dyn Query<CodecEnum>> =
+    //     DoublePoint::new_range_query("totalAmount".into(), 5.0, 15.0).unwrap();
+    // let mut collector = TopDocsCollector::new(2000);
+    // for i in 0..499 {
+    //     index_searcher.search(&*query, &mut collector)?;
+    //     hits += collector.top_docs().total_hits();
+    // }
+    // let trip_range_query: Box<dyn Query<CodecEnum>> =
+    //     DoublePoint::new_range_query("tripDistance".into(), 0.0, 50.0).unwrap();
 
-    let pool = Arc::new(AtomicI32::new(0));
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    // let query_offset = queries.read().unwrap().len() / 2;
-    let mut sum = 0;
-
-    let stop_clone = stop.clone();
-
-    let mut max_qps = 1;
-    let search_count = Arc::new(AtomicUsize::new(0));
-    let search_count_time = Arc::new(AtomicUsize::new(0));
-
-    thread::scope(|s| {
-        for i in 0..2 {
-            let stop_clone = stop.clone();
-            let pool_clone = pool.clone();
-            let searcher_clone = index_searcher.clone();
-            // let start_pos = query_offset * i;
-            let queries_clone = queries.clone();
-            let search_count_clone = search_count.clone();
-            let search_count_time_clone = search_count_time.clone();
-
-            s.spawn(move || {
-                // let mut pos = start_pos.clone();
-
-                for qq in queries_clone.read().unwrap().iter() {
-                    while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
-                        let mut wait = true;
-                        if pool_clone.load(atomic::Ordering::Acquire) > 0 {
-                            if pool_clone.fetch_sub(1, atomic::Ordering::AcqRel) >= 1 {
-                                let mut manager = TopDocsCollector::new(1000);
-                                // let query = queries_clone.read().unwrap();
-                                // let t = query.get(pos);
-                                // let q = qq.unwrap();
-                                // let r = qq.as_ref();
-                                let start_time: Instant = Instant::now();
-                                searcher_clone.search(&**qq, &mut manager);
-                                println!("{}", manager.top_docs().total_hits());
-                                let time: Duration = Instant::now().duration_since(start_time);
-                                search_count_time_clone.fetch_add(
-                                    time.as_millis() as usize,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                                search_count_clone
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-                                // pos += 1;
-                                // // sum += manager.top_docs().total_hits() as i64;
-                                // if pos >= queries_clone.read().unwrap().len() {
-                                //     pos = 0;
-                                // }
-                                wait = false;
-                            } else {
-                                pool_clone.fetch_add(1, atomic::Ordering::AcqRel);
-                            }
-                        }
-                        if wait {
-                            thread::park_timeout(Duration::from_millis(50));
-                        }
-                    }
-                }
-            });
-        }
-
-        let mut current_qps = 10;
-        let mut delta_qps = 5;
-        let mut found_target = 0;
-
-        pool.store(current_qps, atomic::Ordering::Release);
-
-        thread::sleep(Duration::from_secs(1));
-
-        loop {
-            println!("pool size, {}", pool.load(atomic::Ordering::Acquire));
-            if pool.load(atomic::Ordering::Acquire) <= 0 {
-                current_qps += delta_qps;
-                println!("Increasing QPS to {}", current_qps);
-            } else {
-                delta_qps /= 2;
-                if delta_qps == 0 {
-                    found_target += 1;
-                    println!("found target, {}", found_target);
-                    if found_target >= 5 {
-                        max_qps = current_qps;
-                        break;
-                    }
-                    delta_qps = 1;
-                }
-                current_qps -= delta_qps;
-                println!("Decreasing QPS to {}", current_qps);
-            }
-            pool.store(current_qps, atomic::Ordering::Release);
-            thread::sleep(Duration::from_secs(1));
-        }
-        stop_clone.store(true, std::sync::atomic::Ordering::Release);
-    });
-
-    println!("Maximum QPS: {}", max_qps);
-
+    // let query = BooleanQuery::build(vec![], vec![], vec![trip_range_query], vec![], 1).unwrap();
+    // let mut collector = TopDocsCollector::new(2000);
+    // // for i in 0..1 {
+    // //     index_searcher.search(&*query, &mut collector)?;
+    // //     hits += collector.top_docs().total_hits();
+    // // }
     println!(
-        "QPS computed: {}",
-        ((search_count.load(Ordering::Relaxed) * 1000) / search_count_time.load(Ordering::Relaxed))
-            * 2
+        "{}",
+        Instant::now().duration_since(overall_start).as_nanos()
     );
-
+    println!("Total hits: {}", hits);
     Ok(())
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
