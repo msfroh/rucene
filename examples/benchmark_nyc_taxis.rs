@@ -487,15 +487,14 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
     for line in buf_reader.lines() {
         let lower_bound: f64 = line.unwrap().parse::<f64>().unwrap();
         let upper_bound: f64 = lower_bound + 5000.0;
-        println!("{}, {}", lower_bound, upper_bound);
         let query =
-            DoublePoint::new_range_query("totalAmount".into(), lower_bound, upper_bound).unwrap();
+            DoublePoint::new_range_query("tollsAmount".into(), lower_bound, upper_bound).unwrap();
         queries.write().unwrap().push(query);
     }
 
     let pool = Arc::new(AtomicI32::new(0));
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    // let query_offset = queries.read().unwrap().len() / 2;
+    let query_offset = queries.read().unwrap().len() / 20;
     let mut sum = 0;
 
     let stop_clone = stop.clone();
@@ -505,51 +504,88 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
     let search_count_time = Arc::new(AtomicUsize::new(0));
 
     thread::scope(|s| {
-        for i in 0..2 {
+        for i in 0..20 {
             let stop_clone = stop.clone();
             let pool_clone = pool.clone();
             let searcher_clone = index_searcher.clone();
-            // let start_pos = query_offset * i;
+            let start_pos = query_offset * i;
             let queries_clone = queries.clone();
             let search_count_clone = search_count.clone();
             let search_count_time_clone = search_count_time.clone();
 
             s.spawn(move || {
-                // let mut pos = start_pos.clone();
+                let mut pos = start_pos.clone();
 
-                for qq in queries_clone.read().unwrap().iter() {
-                    while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
-                        let mut wait = true;
-                        if pool_clone.load(atomic::Ordering::Acquire) > 0 {
-                            if pool_clone.fetch_sub(1, atomic::Ordering::AcqRel) >= 1 {
-                                let mut manager = TopDocsCollector::new(1000);
-                                // let query = queries_clone.read().unwrap();
-                                // let t = query.get(pos);
-                                // let q = qq.unwrap();
-                                // let r = qq.as_ref();
-                                let start_time: Instant = Instant::now();
-                                searcher_clone.search(&**qq, &mut manager);
-                                println!("{}", manager.top_docs().total_hits());
-                                let time: Duration = Instant::now().duration_since(start_time);
-                                search_count_time_clone.fetch_add(
-                                    time.as_millis() as usize,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                                search_count_clone
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // for qq in queries_clone.read().unwrap().iter() {
+                while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
+                    let mut wait = true;
+                    if pool_clone.load(atomic::Ordering::Acquire) > 0 {
+                        if pool_clone.fetch_sub(1, atomic::Ordering::AcqRel) >= 1 {
+                            let mut manager = TopDocsCollector::new(1000);
+                            let query = queries_clone.read().unwrap();
+                            let t = query.get(pos);
+                            let q = t.unwrap();
+                            let r = q.as_ref();
+                            println!("{}", r.to_string());
+                            let start_time: Instant = Instant::now();
+                            searcher_clone.search(&*r, &mut manager);
+                            println!("{}", manager.top_docs().total_hits());
+                            let time: Duration = Instant::now().duration_since(start_time);
+                            println!("{:#?}", time);
+                            search_count_time_clone.fetch_add(
+                                time.as_millis() as usize,
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
+                            search_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                                // pos += 1;
-                                // // sum += manager.top_docs().total_hits() as i64;
-                                // if pos >= queries_clone.read().unwrap().len() {
-                                //     pos = 0;
-                                // }
-                                wait = false;
-                            } else {
-                                pool_clone.fetch_add(1, atomic::Ordering::AcqRel);
+                            pos += 1;
+                            // // sum += manager.top_docs().total_hits() as i64;
+                            if pos >= queries_clone.read().unwrap().len() {
+                                pos = 0;
                             }
+                            wait = false;
+                        } else {
+                            pool_clone.fetch_add(1, atomic::Ordering::AcqRel);
                         }
-                        if wait {
-                            thread::park_timeout(Duration::from_millis(50));
+                    }
+                    if wait {
+                        thread::park_timeout(Duration::from_millis(50));
+                    }
+                }
+                // }
+            });
+        }
+        let terms = [
+            "picked", "dropped", "total", "amount", "charged", "distance",
+        ];
+        for term in terms.iter() {
+            let searcher_clone = index_searcher.clone();
+            let query: TermQuery = TermQuery::new(
+                Term::new("description".into(), term.as_bytes().to_vec()),
+                1.0,
+                None,
+            );
+            s.spawn(move || {
+                let mut manager = TopDocsCollector::new(100000);
+                searcher_clone.search(&query, &mut manager);
+                println!("term hits: {}", manager.top_docs().total_hits());
+                for d in manager.top_docs().score_docs() {
+                    let doc_id = d.doc_id();
+                    println!("  doc: {}", doc_id);
+                    // fetch stored fields
+                    let stored_fields = vec!["description".into()];
+                    let stored_doc = searcher_clone
+                        .reader()
+                        .document(doc_id, &stored_fields)
+                        .unwrap();
+                    if stored_doc.fields.len() > 0 {
+                        println!("    stroed fields: ");
+                        for s in &stored_doc.fields {
+                            println!(
+                                "      field: {}, value: {}",
+                                s.field.name(),
+                                s.field.field_data().unwrap()
+                            );
                         }
                     }
                 }
