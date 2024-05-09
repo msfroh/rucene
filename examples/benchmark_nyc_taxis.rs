@@ -475,7 +475,7 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
     > = Arc::new(DefaultIndexSearcher::new(Arc::new(reader), None));
     let mut hits: usize = 0;
 
-    let range = Path::new("/home/hvamsi/code/rucene/data/test_range.txt");
+    let range = Path::new("test_range.txt");
 
     let file = File::open(range).expect("Failed to open file");
 
