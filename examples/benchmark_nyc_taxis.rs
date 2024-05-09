@@ -443,6 +443,8 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
     let path = "/tmp/test_rucene";
     let dir_path = Path::new(path);
 
+    let runTerms = std::env::args().nth(1).unwrap();
+
     let directory = Arc::new(FSDirectory::with_path(&dir_path)?);
 
     let reader: StandardDirectoryReader<
@@ -558,38 +560,40 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
         let terms = [
             "picked", "dropped", "total", "amount", "charged", "distance",
         ];
-        for term in terms.iter() {
-            let searcher_clone = index_searcher.clone();
-            let query: TermQuery = TermQuery::new(
-                Term::new("description".into(), term.as_bytes().to_vec()),
-                1.0,
-                None,
-            );
-            s.spawn(move || {
-                let mut manager = TopDocsCollector::new(100000);
-                searcher_clone.search(&query, &mut manager);
-                println!("term hits: {}", manager.top_docs().total_hits());
-                for d in manager.top_docs().score_docs() {
-                    let doc_id = d.doc_id();
-                    println!("  doc: {}", doc_id);
-                    // fetch stored fields
-                    let stored_fields = vec!["description".into()];
-                    let stored_doc = searcher_clone
-                        .reader()
-                        .document(doc_id, &stored_fields)
-                        .unwrap();
-                    if stored_doc.fields.len() > 0 {
-                        println!("    stroed fields: ");
-                        for s in &stored_doc.fields {
-                            println!(
-                                "      field: {}, value: {}",
-                                s.field.name(),
-                                s.field.field_data().unwrap()
-                            );
+        if runTerms == "true" {
+            for term in terms.iter() {
+                let searcher_clone = index_searcher.clone();
+                let query: TermQuery = TermQuery::new(
+                    Term::new("description".into(), term.as_bytes().to_vec()),
+                    1.0,
+                    None,
+                );
+                s.spawn(move || {
+                    let mut manager = TopDocsCollector::new(100000);
+                    searcher_clone.search(&query, &mut manager);
+                    println!("term hits: {}", manager.top_docs().total_hits());
+                    for d in manager.top_docs().score_docs() {
+                        let doc_id = d.doc_id();
+                        println!("  doc: {}", doc_id);
+                        // fetch stored fields
+                        let stored_fields = vec!["description".into()];
+                        let stored_doc = searcher_clone
+                            .reader()
+                            .document(doc_id, &stored_fields)
+                            .unwrap();
+                        if stored_doc.fields.len() > 0 {
+                            println!("    stroed fields: ");
+                            for s in &stored_doc.fields {
+                                println!(
+                                    "      field: {}, value: {}",
+                                    s.field.name(),
+                                    s.field.field_data().unwrap()
+                                );
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
         }
 
         let mut current_qps = 10;
