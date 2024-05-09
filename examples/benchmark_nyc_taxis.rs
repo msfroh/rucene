@@ -494,7 +494,7 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = Arc::new(AtomicI32::new(0));
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let query_offset = queries.read().unwrap().len() / 20;
+    let query_offset = queries.read().unwrap().len() / 2;
     let mut sum = 0;
 
     let stop_clone = stop.clone();
@@ -504,7 +504,7 @@ fn querying() -> Result<(), Box<dyn std::error::Error>> {
     let search_count_time = Arc::new(AtomicUsize::new(0));
 
     thread::scope(|s| {
-        for i in 0..20 {
+        for i in 0..2 {
             let stop_clone = stop.clone();
             let pool_clone = pool.clone();
             let searcher_clone = index_searcher.clone();

@@ -45,3 +45,5 @@ tempfile = "3.0.8"
 opt-level = 3
 debug = false
 debug-assertions = false
+lto=true
+codegen-units = 1
