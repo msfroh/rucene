@@ -1684,7 +1684,7 @@ where
     ) -> Result<bool> {
         let mut processed = false;
         if index_writer.writer.tragedy.is_none() {
-            while let Ok(event) = index_writer.writer.doc_writer.events.pop() {
+            while let Some(event) = index_writer.writer.doc_writer.events.pop() {
                 processed = true;
                 event.process(index_writer, trigger_merge, force_purge)?;
             }
@@ -2784,7 +2784,7 @@ where
         index_writer
             .writer
             .rate_limiters
-            .get_or(|| Box::new(Arc::clone(&merge.rate_limiter)));
+            .get_or(|| Arc::clone(&merge.rate_limiter));
 
         // let t0 = SystemTime::now();
 

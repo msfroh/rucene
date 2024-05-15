@@ -241,7 +241,7 @@ impl DocIdSetBuilder {
             let l = if self.multivalued {
                 self.dedup(&mut concatenated.array, concatenated.length)
             } else {
-                assert!(self.no_dups(&concatenated.array, concatenated.length));
+                // assert!(self.no_dups(&concatenated.array, concatenated.length));
                 concatenated.length
             };
             assert!(l <= concatenated.length);

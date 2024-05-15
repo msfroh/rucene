@@ -42,7 +42,7 @@ extern crate serde_json;
 extern crate alloc;
 extern crate byteorder;
 extern crate bytes;
-extern crate crc;
+extern crate crc32fast;
 extern crate crossbeam;
 extern crate fasthash;
 extern crate flate2;
